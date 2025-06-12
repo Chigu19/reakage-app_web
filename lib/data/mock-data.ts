@@ -1,3 +1,11 @@
+import { createClient } from '@supabase/supabase-js';
+
+// Supabase configuration - replace with your actual values
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'your-supabase-url';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'your-supabase-anon-key';
+
+export const supabase = createClient(supabaseUrl, supabaseKey);
+
 export interface WaterQualityIssue {
   id: string;
   location: {
@@ -28,6 +36,106 @@ export interface WaterQualityIssue {
   }[];
 }
 
+// Cache for storing data
+let cachedIssues: WaterQualityIssue[] = [];
+let lastCacheUpdate: number = 0;
+const CACHE_DURATION = 30000; // 30 seconds
+
+// Helper function to transform database row to WaterQualityIssue
+const transformDbRowToIssue = (row: any, comments: any[] = []): WaterQualityIssue => ({
+  id: row.id,
+  location: {
+    name: row.location_name,
+    district: row.location_district,
+    region: row.location_region,
+    coordinates: row.location_lat && row.location_lng ? {
+      lat: row.location_lat,
+      lng: row.location_lng
+    } : undefined
+  },
+  reportedBy: row.reported_by,
+  reportedAt: row.reported_at,
+  description: row.description,
+  waterSource: row.water_source,
+  issueType: row.issue_type,
+  severity: row.severity,
+  status: row.status,
+  assignedTo: row.assigned_to,
+  updatedAt: row.updated_at,
+  resolvedAt: row.resolved_at,
+  images: row.images || [],
+  comments: comments.map(comment => ({
+    id: comment.id,
+    text: comment.text,
+    createdAt: comment.created_at,
+    createdBy: comment.created_by
+  }))
+});
+
+// Background data fetching
+const fetchAllIssuesFromDB = async (): Promise<WaterQualityIssue[]> => {
+  try {
+    const { data: issues, error: issuesError } = await supabase
+      .from('water_quality_issues')
+      .select('*')
+      .order('reported_at', { ascending: false });
+
+    if (issuesError) {
+      console.error('Error fetching issues:', issuesError);
+      return [];
+    }
+
+    // Fetch comments for all issues
+    const { data: comments, error: commentsError } = await supabase
+      .from('water_quality_comments')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (commentsError) {
+      console.error('Error fetching comments:', commentsError);
+    }
+
+    // Group comments by issue_id
+    const commentsByIssue = (comments || []).reduce((acc, comment) => {
+      if (!acc[comment.issue_id]) {
+        acc[comment.issue_id] = [];
+      }
+      acc[comment.issue_id].push(comment);
+      return acc;
+    }, {});
+
+    return issues.map(issue => transformDbRowToIssue(issue, commentsByIssue[issue.id] || []));
+  } catch (error) {
+    console.error('Error in fetchAllIssuesFromDB:', error);
+    return [];
+  }
+};
+
+// Update cache function
+const updateCache = async () => {
+  const now = Date.now();
+  if (now - lastCacheUpdate > CACHE_DURATION) {
+    const issues = await fetchAllIssuesFromDB();
+    cachedIssues = issues;
+    lastCacheUpdate = now;
+  }
+};
+
+// Initialize cache on first load
+let isInitialized = false;
+const initializeCache = () => {
+  if (!isInitialized) {
+    isInitialized = true;
+    updateCache(); // Don't await, let it run in background
+    // Set up periodic cache updates
+    setInterval(updateCache, CACHE_DURATION);
+  }
+};
+
+// Call initialize on module load
+initializeCache();
+
+// Export the original mock data as fallback
 export const mockWaterQualityIssues: WaterQualityIssue[] = [
   {
     id: "WQI-001",
@@ -332,28 +440,37 @@ export const mockWaterQualityIssues: WaterQualityIssue[] = [
   }
 ];
 
+// Synchronous functions that use cache or fallback to mock data
+const getDataSource = (): WaterQualityIssue[] => {
+  // If cache is available and recent, use it; otherwise use mock data
+  return cachedIssues.length > 0 ? cachedIssues : mockWaterQualityIssues;
+};
+
 export const getIssuesByStatus = () => {
+  const issues = getDataSource();
   const statuses = ['pending', 'investigating', 'in_progress', 'resolved', 'rejected'];
   
   return statuses.map(status => ({
     status,
-    count: mockWaterQualityIssues.filter(issue => issue.status === status).length
+    count: issues.filter(issue => issue.status === status).length
   }));
 };
 
 export const getIssuesBySeverity = () => {
+  const issues = getDataSource();
   const severities = ['low', 'medium', 'high', 'critical'];
   
   return severities.map(severity => ({
     severity,
-    count: mockWaterQualityIssues.filter(issue => issue.severity === severity).length
+    count: issues.filter(issue => issue.severity === severity).length
   }));
 };
 
 export const getIssuesByRegion = () => {
+  const issues = getDataSource();
   const regionCounts = {};
   
-  mockWaterQualityIssues.forEach(issue => {
+  issues.forEach(issue => {
     const region = issue.location.region;
     if (!regionCounts[region]) {
       regionCounts[region] = 0;
@@ -368,9 +485,10 @@ export const getIssuesByRegion = () => {
 };
 
 export const getIssuesByType = () => {
+  const issues = getDataSource();
   const typeCounts = {};
   
-  mockWaterQualityIssues.forEach(issue => {
+  issues.forEach(issue => {
     const type = issue.issueType;
     if (!typeCounts[type]) {
       typeCounts[type] = 0;
@@ -385,26 +503,158 @@ export const getIssuesByType = () => {
 };
 
 export const getRecentIssues = (limit = 5) => {
-  return [...mockWaterQualityIssues]
+  const issues = getDataSource();
+  return [...issues]
     .sort((a, b) => new Date(b.reportedAt).getTime() - new Date(a.reportedAt).getTime())
     .slice(0, limit);
 };
 
 export const getHighPriorityIssues = () => {
-  return mockWaterQualityIssues.filter(
+  const issues = getDataSource();
+  return issues.filter(
     issue => (issue.severity === 'high' || issue.severity === 'critical') && 
     issue.status !== 'resolved' && 
     issue.status !== 'rejected'
   );
 };
 
-export const getTotalIssuesCount = () => mockWaterQualityIssues.length;
+export const getTotalIssuesCount = () => getDataSource().length;
 
 export const getResolvedIssuesCount = () => 
-  mockWaterQualityIssues.filter(issue => issue.status === 'resolved').length;
+  getDataSource().filter(issue => issue.status === 'resolved').length;
 
 export const getPendingIssuesCount = () => 
-  mockWaterQualityIssues.filter(issue => issue.status === 'pending').length;
+  getDataSource().filter(issue => issue.status === 'pending').length;
 
 export const getCriticalIssuesCount = () => 
-  mockWaterQualityIssues.filter(issue => issue.severity === 'critical' && issue.status !== 'resolved').length;
+  getDataSource().filter(issue => issue.severity === 'critical' && issue.status !== 'resolved').length;
+
+// Additional async functions for when you need real-time updates
+export const refreshData = async () => {
+  await updateCache();
+};
+
+export const forceRefresh = async () => {
+  lastCacheUpdate = 0; // Force cache refresh
+  await updateCache();
+};
+
+// CRUD operations (async, for when you need to modify data)
+export const createIssue = async (issue: Omit<WaterQualityIssue, 'id' | 'comments'>): Promise<WaterQualityIssue | null> => {
+  try {
+    const { data, error } = await supabase
+      .from('water_quality_issues')
+      .insert({
+        id: `WQI-${Date.now()}`,
+        location_name: issue.location.name,
+        location_district: issue.location.district,
+        location_region: issue.location.region,
+        location_lat: issue.location.coordinates?.lat,
+        location_lng: issue.location.coordinates?.lng,
+        reported_by: issue.reportedBy,
+        reported_at: issue.reportedAt,
+        description: issue.description,
+        water_source: issue.waterSource,
+        issue_type: issue.issueType,
+        severity: issue.severity,
+        status: issue.status,
+        assigned_to: issue.assignedTo,
+        updated_at: issue.updatedAt,
+        resolved_at: issue.resolvedAt,
+        images: issue.images
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating issue:', error);
+      return null;
+    }
+
+    // Refresh cache after creating
+    await forceRefresh();
+    return transformDbRowToIssue(data, []);
+  } catch (error) {
+    console.error('Error in createIssue:', error);
+    return null;
+  }
+};
+
+export const updateIssue = async (id: string, updates: Partial<WaterQualityIssue>): Promise<WaterQualityIssue | null> => {
+  try {
+    const updateData: any = {};
+    
+    if (updates.location) {
+      updateData.location_name = updates.location.name;
+      updateData.location_district = updates.location.district;
+      updateData.location_region = updates.location.region;
+      updateData.location_lat = updates.location.coordinates?.lat;
+      updateData.location_lng = updates.location.coordinates?.lng;
+    }
+    
+    if (updates.reportedBy) updateData.reported_by = updates.reportedBy;
+    if (updates.reportedAt) updateData.reported_at = updates.reportedAt;
+    if (updates.description) updateData.description = updates.description;
+    if (updates.waterSource) updateData.water_source = updates.waterSource;
+    if (updates.issueType) updateData.issue_type = updates.issueType;
+    if (updates.severity) updateData.severity = updates.severity;
+    if (updates.status) updateData.status = updates.status;
+    if (updates.assignedTo !== undefined) updateData.assigned_to = updates.assignedTo;
+    if (updates.updatedAt) updateData.updated_at = updates.updatedAt;
+    if (updates.resolvedAt !== undefined) updateData.resolved_at = updates.resolvedAt;
+    if (updates.images) updateData.images = updates.images;
+
+    const { data, error } = await supabase
+      .from('water_quality_issues')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating issue:', error);
+      return null;
+    }
+
+    // Refresh cache after updating
+    await forceRefresh();
+
+    // Fetch comments for the updated issue
+    const { data: comments } = await supabase
+      .from('water_quality_comments')
+      .select('*')
+      .eq('issue_id', id)
+      .order('created_at', { ascending: true });
+
+    return transformDbRowToIssue(data, comments || []);
+  } catch (error) {
+    console.error('Error in updateIssue:', error);
+    return null;
+  }
+};
+
+export const addComment = async (issueId: string, comment: Omit<WaterQualityIssue['comments'][0], 'id'>): Promise<boolean> => {
+  try {
+    const { error } = await supabase
+      .from('water_quality_comments')
+      .insert({
+        id: `c-${Date.now()}`,
+        issue_id: issueId,
+        text: comment.text,
+        created_at: comment.createdAt,
+        created_by: comment.createdBy
+      });
+
+    if (error) {
+      console.error('Error adding comment:', error);
+      return false;
+    }
+
+    // Refresh cache after adding comment
+    await forceRefresh();
+    return true;
+  } catch (error) {
+    console.error('Error in addComment:', error);
+    return false;
+  }
+};

@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import {
-  AreaChart,
-  Droplets,
-  Home,
-  Settings,
-  AlertTriangle,
+import { 
+  AreaChart, 
+  Droplets, 
+  Home, 
+  Settings, 
+  AlertTriangle 
 } from "lucide-react";
 
 export function DashboardSidebar() {
@@ -44,12 +44,12 @@ export function DashboardSidebar() {
   return (
     <div className="flex h-full flex-col border-r bg-muted/40">
       <div className="flex h-14 items-center border-b px-4">
-        <Link
-          href="/dashboard"
+        <Link 
+          href="/dashboard" 
           className="flex items-center gap-2 font-semibold"
         >
           <Droplets className="h-6 w-6 text-blue-600" />
-          <span className="text-lg">Water Watch </span>
+          <span className="text-lg">Water Watch</span>
         </Link>
       </div>
       <div className="flex-1">
@@ -59,16 +59,11 @@ export function DashboardSidebar() {
               key={item.name}
               href={item.href}
               className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted",
-                item.current ? "bg-muted" : "transparent"
+                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted transition-colors",
+                item.current ? "bg-muted text-primary" : "text-muted-foreground hover:text-foreground"
               )}
             >
-              <item.icon
-                className={cn(
-                  "h-5 w-5",
-                  item.current ? "text-primary" : "text-muted-foreground"
-                )}
-              />
+              <item.icon className={cn("h-5 w-5", item.current ? "text-primary" : "text-muted-foreground")} />
               <span>{item.name}</span>
             </Link>
           ))}
